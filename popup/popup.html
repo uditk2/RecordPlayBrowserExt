@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Browser Action Recorder</title>
+  <style>
+    body {
+      width: 200px;
+      padding: 10px;
+      font-family: Arial, sans-serif;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    button {
+      padding: 8px 12px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: background-color 0.3s;
+    }
+    #recordBtn {
+      background-color: #f44336;
+      color: white;
+    }
+    #recordBtn.recording {
+      background-color: #b71c1c;
+      animation: pulse 1.5s infinite;
+    }
+    #playBtn {
+      background-color: #4CAF50;
+      color: white;
+      opacity: 0.6;
+    }
+    #playBtn.enabled {
+      opacity: 1;
+    }
+    #statusText {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #666;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.7; }
+      100% { opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h3>Browser Action Recorder</h3>
+    <button id="recordBtn">Record</button>
+    <button id="playBtn" disabled>Play</button>
+    <div id="statusText">Ready to record</div>
+    <div id="progressContainer" style="display: none; margin-top: 10px;">
+      <div style="display: flex; justify-content: space-between; font-size: 12px;">
+        <span>Progress:</span>
+        <span id="progressText">0/0</span>
+      </div>
+      <progress id="progressBar" value="0" max="100" style="width: 100%; margin-top: 4px;"></progress>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
