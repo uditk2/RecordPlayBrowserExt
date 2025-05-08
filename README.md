@@ -1,53 +1,43 @@
-# Browser Action Recorder Extension
+# Record and Play Browser Extension
 
-This Chrome extension allows you to record and replay browser actions. It captures clicks, text input, form changes, and navigation between pages.
+## Overview
 
-## Features
+The Record and Play Extension is a powerful browser automation tool that solves the common problem of repetitive tasks in web browsing. Whether you're filling out similar forms multiple times, following the same navigation patterns, or performing repetitive actions on a website, this extension helps you automate these tasks by recording your actions in real-time and playing them back whenever needed.
 
+### Key Features
 - Record browser actions including clicks, typing, and form interactions
-- Play back recorded actions with the exact same timing and delays as the original recording
+- Playback recorded actions with precise timing
+- Work across multiple tabs and pages
 - Real-time progress tracking during playback
-- Works across multiple tabs and pages
-- Simple and intuitive user interface
-- Persistent storage that maintains recordings even after browser restart
+- Persistent storage for saved recordings
 
-## Installation Instructions
+## Browser Support
 
-1. Download or clone this repository
-2. Open Chrome and navigate to `chrome://extensions/`
-3. Enable "Developer Mode" (toggle in the top-right corner)
-4. Click "Load unpacked" and select the extension directory
-5. The extension icon should appear in your browser toolbar
+The extension is available for both major browser platforms:
 
-## Usage
+- **Chrome/Chromium**: See detailed instructions in the [Chrome extension documentation](./chrome/README.md)
+- **Firefox**: See detailed instructions in the [Firefox extension documentation](./firefox/README.md)
 
-1. Click the extension icon to open the popup
-2. Click "Record" to start recording your actions
-3. Perform the actions you want to record (clicking, typing, etc.)
-4. Click "Stop Recording" when finished
-5. Click "Play" to replay the recorded actions
+## Use Cases
 
-## Icon Creation
+- Automating repetitive form submissions
+- Testing web applications
+- Creating automated workflows
+- Training demonstrations
+- Data entry automation
 
-You'll need to create three icon sizes for the extension:
-- icon16.png (16x16 pixels)
-- icon48.png (48x48 pixels)
-- icon128.png (128x128 pixels)
+## Getting Started
 
-Place these icons in an `icons` folder within the extension directory.
+Choose your preferred browser and follow the installation instructions in the respective README files:
+- For Chrome users: Navigate to the `chrome` directory
+- For Firefox users: Navigate to the `firefox` directory
 
 ## Limitations
 
-- The extension works best on static websites. Dynamic websites with complex JavaScript may have unpredictable results.
-- Some websites may block content scripts for security reasons, which can prevent the extension from working properly.
-- The extension records actions based on element attributes and XPath. If the website structure changes, playback may fail.
-
-## Troubleshooting
-
-If playback doesn't work as expected:
-- Make sure the starting webpage matches where you began recording
-- Try recording a simpler sequence of actions
-- Check if the website has security measures that block content scripts
+- Works best on static websites
+- Performance may vary on dynamic websites with complex JavaScript
+- Some websites may block the extension for security reasons
+- Playback reliability depends on website structure stability
 
 ## License
 

@@ -1,12 +1,35 @@
-// Global variables
+// Global variables and utility functions
 let isRecording = false;
 let eventListenersAttached = false;
 let lastUrl = window.location.href;
 let contentScriptReady = false;
+let lastScrollPosition = { x: 0, y: 0 };
+let scrollTimeout = null;
+let lastInputValues = new Map(); // Track last input value for each element
+let currentTabId = null; // Add tracking for current tab
 
-// Utility: Sleep function
+// Utility: Sleep function - moved to top to be used globally
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Notify background script when content script is ready
+function notifyContentScriptReady() {
+  // Send message immediately if document is already interactive or complete
+  if (document.readyState === 'interactive' || document.readyState === 'complete') {
+    chrome.runtime.sendMessage({ type: 'contentScriptReady', status: 'ready' });
+    console.log('Document already loaded, sent ready message immediately');
+    contentScriptReady = true;
+    init();
+  } else {
+    // Otherwise, wait for the DOMContentLoaded event
+    document.addEventListener('DOMContentLoaded', () => {
+      chrome.runtime.sendMessage({ type: 'contentScriptReady', status: 'ready' });
+      console.log('Document loaded, sent ready message');
+      contentScriptReady = true;
+      init();
+    });
+  }
 }
 
 // Initialize content script
@@ -17,9 +40,12 @@ function init() {
     eventListenersAttached = true;
   }
   
-  // Signal that content script is ready
-  contentScriptReady = true;
-  chrome.runtime.sendMessage({ type: 'contentScriptReady' });
+  // Get current tab ID
+  chrome.runtime.sendMessage({ command: 'getCurrentTab' }, function(response) {
+    if (response && response.tabId) {
+      currentTabId = response.tabId;
+    }
+  });
   
   // Check if we were already recording
   chrome.storage.local.get(['isRecording'], function(result) {
@@ -42,9 +68,10 @@ function handleMessages(request, sender, sendResponse) {
       stopRecording();
       break;
     case 'playActions':
-      playActions(request.actions)
-        .then(() => sendResponse({ status: 'complete' }))
-        .catch(error => sendResponse({ status: 'error', message: error.message }));
+      const action = request.actions[0];
+      executeAction(action)
+        .then(() => sendResponse({ status: 'success' }))
+        .catch(error => sendResponse({ error: error.message }));
       return true; // Required for async sendResponse
     case 'isContentScriptReady':
       sendResponse({ ready: contentScriptReady });
@@ -54,16 +81,41 @@ function handleMessages(request, sender, sendResponse) {
 
 // Attach event listeners to capture user actions
 function attachEventListeners() {
+  // Scroll event detection with debouncing
+  window.addEventListener('scroll', function() {
+    if (!isRecording) return;
+    
+    // Clear existing timeout
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
+    }
+    
+    // Set new timeout to record scroll position after scrolling stops
+    scrollTimeout = setTimeout(() => {
+      const newPosition = {
+        x: window.pageXOffset,
+        y: window.pageYOffset
+      };
+      
+      // Only record if position changed significantly (more than 50px)
+      if (Math.abs(newPosition.y - lastScrollPosition.y) > 50 ||
+          Math.abs(newPosition.x - lastScrollPosition.x) > 50) {
+        recordAction({
+          type: 'scroll',
+          x: newPosition.x,
+          y: newPosition.y
+        });
+        lastScrollPosition = newPosition;
+      }
+    }, 150); // Debounce for 150ms
+  }, true);
+
   // URL change detection
   let lastUrl = window.location.href;
   new MutationObserver(() => {
     if (lastUrl !== window.location.href) {
       if (isRecording) {
-        recordAction({
-          type: 'navigation',
-          url: window.location.href,
-          fromUrl: lastUrl
-        });
+        recordNavigation(window.location.href, lastUrl);
       }
       lastUrl = window.location.href;
     }
@@ -81,21 +133,23 @@ function attachEventListeners() {
     });
   }, true);
 
-  // Click events
+  // Enhance click events with parent context
   document.addEventListener('click', function(event) {
     if (!isRecording) return;
     
     const element = event.target;
     const xpath = getXPath(element);
+    const parentContext = getParentContext(element);
     
-    // Record click action
+    // Record click action with enhanced context
     recordAction({
       type: 'click',
       xpath: xpath,
       tagName: element.tagName.toLowerCase(),
       elementType: element.type || null,
       id: element.id || null,
-      className: element.className || null
+      className: element.className || null,
+      parentContext: parentContext
     });
   }, true);
   
@@ -107,7 +161,32 @@ function attachEventListeners() {
     // Only record for input elements that accept text
     if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
       const xpath = getXPath(element);
+      const currentValue = element.value;
+      const lastValue = lastInputValues.get(xpath) || '';
       
+      // Determine what changed
+      let inputType = '';
+      let inputData = '';
+      
+      if (currentValue.length > lastValue.length) {
+        // Text was added
+        inputType = 'insertion';
+        inputData = currentValue.slice(lastValue.length);
+      } else if (currentValue.length < lastValue.length) {
+        // Text was removed
+        inputType = 'deletion';
+        const deleteCount = lastValue.length - currentValue.length;
+        if (currentValue === lastValue.slice(0, -deleteCount)) {
+          // Backspace from end
+          inputType = 'backspace';
+          inputData = deleteCount.toString();
+        } else {
+          // Other deletion (like selection delete)
+          inputData = lastValue;
+        }
+      }
+      
+      // Record the input action with more detailed information
       recordAction({
         type: 'input',
         xpath: xpath,
@@ -115,8 +194,13 @@ function attachEventListeners() {
         elementType: element.type || null,
         id: element.id || null,
         className: element.className || null,
-        value: element.value
+        inputType: inputType,
+        data: inputData,
+        cursorPosition: element.selectionStart
       });
+      
+      // Update the last known value
+      lastInputValues.set(xpath, currentValue);
     }
   }, true);
   
@@ -179,6 +263,17 @@ function recordAction(action) {
   });
 }
 
+// Enhance the navigation recording
+function recordNavigation(url, fromUrl, newTab = false, tabId = null) {
+  recordAction({
+    type: 'navigation',
+    url: url,
+    fromUrl: fromUrl,
+    newTab: newTab,
+    tabId: tabId || currentTabId
+  });
+}
+
 // Play a sequence of recorded actions
 async function playActions(actions) {
   try {
@@ -233,6 +328,8 @@ async function executeAction(action) {
   
   try {
     switch (action.type) {
+      case 'scroll':
+        return await handleScrollAction(action);
       case 'click':
         return await handleClickAction(action);
       
@@ -295,26 +392,52 @@ async function handleInputAction(action) {
   element.scrollIntoView({ behavior: 'smooth', block: 'center' });
   await sleep(300);
   
-  // Focus the element first
+  // Focus the element
   element.focus();
   
-  // Clear existing value
-  element.value = '';
+  // Get current value and cursor position
+  let currentValue = element.value;
+  let cursorPos = action.cursorPosition || element.value.length;
   
-  // Type the text character by character (more realistic)
-  const text = action.value || '';
-  for (let i = 0; i < text.length; i++) {
-    element.value += text[i];
-    
-    // Create and dispatch an input event
-    const inputEvent = new Event('input', {
-      bubbles: true,
-      cancelable: true
-    });
-    
-    element.dispatchEvent(inputEvent);
-    await sleep(50); // Small delay between characters
+  // Handle different input types
+  switch (action.inputType) {
+    case 'insertion':
+      // Insert the new text at the cursor position
+      currentValue = currentValue.slice(0, cursorPos) + 
+                    action.data + 
+                    currentValue.slice(cursorPos);
+      cursorPos += action.data.length;
+      break;
+      
+    case 'backspace':
+      // Remove characters before cursor position
+      const deleteCount = parseInt(action.data, 10);
+      currentValue = currentValue.slice(0, cursorPos - deleteCount) + 
+                    currentValue.slice(cursorPos);
+      cursorPos -= deleteCount;
+      break;
+      
+    case 'deletion':
+      // Handle other types of deletion (like selection delete)
+      // In this case we restore the last known value and replay from there
+      currentValue = action.data;
+      cursorPos = action.cursorPosition;
+      break;
   }
+  
+  // Update element value
+  element.value = currentValue;
+  element.setSelectionRange(cursorPos, cursorPos);
+  
+  // Dispatch input event
+  const inputEvent = new Event('input', {
+    bubbles: true,
+    cancelable: true
+  });
+  element.dispatchEvent(inputEvent);
+  
+  // Small delay for natural typing feel
+  await sleep(50);
   
   return true;
 }
@@ -351,6 +474,19 @@ async function handleChangeAction(action) {
   });
   
   element.dispatchEvent(changeEvent);
+  return true;
+}
+
+// Add new handler for scroll actions
+async function handleScrollAction(action) {
+  window.scrollTo({
+    left: action.x,
+    top: action.y,
+    behavior: 'smooth'
+  });
+  
+  // Wait for scroll to complete
+  await new Promise(resolve => setTimeout(resolve, 500));
   return true;
 }
 
@@ -448,14 +584,115 @@ function getElementByXPath(xpath) {
   }
 }
 
-// Utility: Get element by various selectors as fallback
+// Add new function to get parent context
+function getParentContext(element) {
+  const context = [];
+  let parent = element.parentElement;
+  let depth = 0;
+  
+  // Get context from up to 3 levels of parent elements
+  while (parent && depth < 3) {
+    const contextInfo = {
+      tagName: parent.tagName.toLowerCase(),
+      id: parent.id || null,
+      className: parent.className || null,
+      index: getElementIndex(parent)
+    };
+    
+    // If parent is a list or table, add specific context
+    if (parent.tagName === 'UL' || parent.tagName === 'OL') {
+      contextInfo.listContext = {
+        itemCount: parent.children.length,
+        listType: parent.tagName
+      };
+    } else if (parent.tagName === 'TABLE') {
+      contextInfo.tableContext = {
+        rows: parent.rows.length,
+        cols: parent.rows[0]?.cells.length
+      };
+    }
+    
+    context.push(contextInfo);
+    parent = parent.parentElement;
+    depth++;
+  }
+  
+  return context;
+}
+
+// Add new function to get element's index among siblings
+function getElementIndex(element) {
+  let index = 0;
+  let sibling = element;
+  
+  while (sibling = sibling.previousElementSibling) {
+    if (sibling.tagName === element.tagName) {
+      index++;
+    }
+  }
+  
+  return index;
+}
+
+// Update element selection to use parent context
 function getElementBySelector(action) {
-  // Try by ID
+  // Try by ID first
   if (action.id) {
     const element = document.getElementById(action.id);
     if (element) return element;
   }
   
+  // If we have parent context, use it to narrow down the search
+  if (action.parentContext && action.parentContext.length > 0) {
+    let possibleElements = [];
+    
+    // Get all elements matching the target's tag and class
+    if (action.className) {
+      possibleElements = Array.from(document.getElementsByClassName(action.className))
+        .filter(el => el.tagName.toLowerCase() === action.tagName.toLowerCase());
+    } else {
+      possibleElements = Array.from(document.getElementsByTagName(action.tagName));
+    }
+    
+    // Filter elements based on parent context
+    for (const element of possibleElements) {
+      if (matchesParentContext(element, action.parentContext)) {
+        return element;
+      }
+    }
+  }
+  
+  // Fallback to existing methods
+  return getElementByFallbackMethods(action);
+}
+
+// Add new function to match parent context
+function matchesParentContext(element, parentContext) {
+  let currentElement = element.parentElement;
+  let contextIndex = 0;
+  
+  while (currentElement && contextIndex < parentContext.length) {
+    const context = parentContext[contextIndex];
+    
+    // Check if current parent matches context
+    if (
+      currentElement.tagName.toLowerCase() !== context.tagName ||
+      (context.id && currentElement.id !== context.id) ||
+      (context.className && currentElement.className !== context.className) ||
+      getElementIndex(currentElement) !== context.index
+    ) {
+      return false;
+    }
+    
+    currentElement = currentElement.parentElement;
+    contextIndex++;
+  }
+  
+  return true;
+}
+
+// Move existing fallback methods to separate function
+function getElementByFallbackMethods(action) {
   // Try by class name and tag
   if (action.className && action.tagName) {
     const elements = document.getElementsByClassName(action.className);
@@ -479,55 +716,17 @@ function getElementBySelector(action) {
   return null;
 }
 
-// Utility: Sleep function
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// Initialize content script
-init();
-
-// Handle playback of actions
-chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
-  if (request.command === 'playActions') {
-    const action = request.actions[0];
-    try {
-      if (action.type === 'click') {
-        const element = findElementByXPath(action.xpath);
-        if (element) {
-          element.click();
-          sendResponse({ status: 'success' });
-        } else {
-          sendResponse({ error: 'Element not found' });
-        }
-      } else if (action.type === 'input') {
-        const element = findElementByXPath(action.xpath);
-        if (element) {
-          element.value = action.value;
-          // Trigger input event to simulate user typing
-          element.dispatchEvent(new Event('input', { bubbles: true }));
-          sendResponse({ status: 'success' });
-        } else {
-          sendResponse({ error: 'Element not found' });
-        }
-      }
-    } catch (error) {
-      sendResponse({ error: error.message });
-    }
-    return true;
-  } else if (request.command === 'isContentScriptReady') {
-    sendResponse({ ready: true });
-    return true;
+// Handle tab focus changes
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'tabFocused' && isRecording) {
+    recordAction({
+      type: 'tabFocus',
+      tabId: message.tabId,
+      fromTabId: currentTabId
+    });
+    currentTabId = message.tabId;
   }
 });
 
-// Helper function to find element by XPath
-function findElementByXPath(xpath) {
-  return document.evaluate(
-    xpath,
-    document,
-    null,
-    XPathResult.FIRST_ORDERED_NODE_TYPE,
-    null
-  ).singleNodeValue;
-}
+// Start initialization by notifying readiness
+notifyContentScriptReady();
